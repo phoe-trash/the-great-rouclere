@@ -12,33 +12,26 @@
   (setf (gethash 555 h::*http-reason-phrase-map*) "Magic Is Gone"))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Definitions
-
-(defvar *magic*)
+;; Acceptor
 
 (defclass magic-acceptor (h:acceptor) ())
 
-(defun call-with-magic (thunk)
-  (let ((*magic* (make-instance 'magic-acceptor :port 0)))
-    (h:start *magic*)
-    (let ((port (h:acceptor-port *magic*)))
-      (unwind-protect (funcall thunk port)
-        (h:stop *magic*)))
-    (unless (expectations)
-      (format *debug-io* "~&;; The Great Rouclere still has has ~D unmet expectations!"
-              (length *expectations*))
-      ;; TODO call a user-defined on-failure function
-      (loop for list in *expectations*
-            for i from 1
-            do (format *debug-io* "~&~3D: ~S~%" i list))
-      (terpri *debug-io*))))
+(defmethod h:acceptor-log-access ((acceptor magic-acceptor) &key &allow-other-keys))
 
-(defmacro with-magic ((port-var) &body body)
-  (a:with-gensyms (thunk)
-    `(flet ((,thunk (,port-var) (declare (ignorable ,port-var)) ,@body))
-       (call-with-magic #',thunk))))
+(defmethod h:acceptor-log-message ((acceptor magic-acceptor) level control &rest args)
+  (declare (ignore args)))
 
-(defvar *expectations* (make-hash-table))
+(defmethod h:acceptor-status-message ((acceptor magic-acceptor) code &key)
+  (if (= 2 (truncate code 100))
+      "The magic is in the air!"
+      "The magic is gone."))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Core
+
+(defvar *magic*)
+
+(defparameter *expectations* (make-hash-table))
 
 (defvar *expectations-lock* (bt:make-lock "The Great Rouclere expectations lock"))
 
@@ -54,9 +47,38 @@
   (bt:with-lock-held (*expectations-lock*)
     (remhash (h:acceptor-port *magic*) *expectations*)))
 
+(defun call-with-magic (thunk on-failure)
+  (let ((*magic* (make-instance 'magic-acceptor :port 0)))
+    (h:start *magic*)
+    (unwind-protect
+         (let ((port (h:acceptor-port *magic*)))
+           (funcall thunk port)
+           (when (expectations)
+             (when on-failure
+               (funcall on-failure (expectations)))
+             (format *debug-io* "~&;; The Great Rouclere still has has ~D unmet expectations!"
+                     (length (expectations)))
+             (loop for list in (expectations)
+                   for i from 1
+                   do (format *debug-io* "~&~3D: ~S~%" i list))))
+      (delete-expectations)
+      (h:stop *magic*))))
+
+(defmacro with-magic ((port-var &key on-failure) &body body)
+  (a:with-gensyms (thunk)
+    `(flet ((,thunk (,port-var)
+              (declare (ignorable ,port-var))
+              ,@body))
+       (call-with-magic #',thunk ,on-failure))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Expectation building
+
 (defmacro expect ((method url &key (times 1)) &body body)
+  ;; TODO error if already in an expectation
   `(progn
      ;; TODO: use a proper queue instead of a O(n²) nconcf.
+     ;; Or maybe build the expectation somewhere else, and only then push it?
      (a:nconcf (expectations) (list (list :method ,method :url ,url :times ,times)))
      ,@body))
 
@@ -99,20 +121,10 @@
               ,@body)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Methods
-
-(defmethod h:acceptor-log-access ((acceptor magic-acceptor) &key &allow-other-keys))
-
-(defmethod h:acceptor-log-message  ((acceptor magic-acceptor) level control &rest args)
-  (declare (ignore args))
-  (call-next-method))
-
-(defmethod h:acceptor-status-message ((acceptor magic-acceptor) code &key)
-  "The magic is gone.")
-
-(defvar *request*)
+;; Expectation matching and response construction
 
 (defgeneric match (key value request)
+  ;; TODO handle duplicates
   (:method :around (key (value function) request)
     (call-next-method key (funcall value request) request))
   (:method ((key (eql :method)) value request)
@@ -142,6 +154,8 @@
         finally (return (or response t))))
 
 (defgeneric respond (key value request)
+  ;; TODO what happens if there is no RESPOND?
+  ;; TODO handle duplicates
   (:method :around (key (value function) request)
     (call-next-method key (funcall value request) request))
   (:method ((key (eql :code)) value request)
@@ -161,12 +175,9 @@
                             (funcall value)
                             value))
         do (respond key value request)
-        finally (return (flex:string-to-octets
-                         body
-                         :external-format babel:*default-character-encoding*))))
+        finally (return body)))
 
 (defmethod h:acceptor-dispatch-request ((acceptor magic-acceptor) request)
-  (setf *request* request)
   (flet ((fail ()
            (setf (h:return-code*) 555)
            (h:abort-request-handler
@@ -177,8 +188,8 @@
           when match
             do (cond ((eq t (getf expectation :times)))
                      ((plusp (getf expectation :times))
-                      (decf (getf expectation :times)))
-                     (t (a:deletef (expectations) expectation :count 1)))
+                      (when (= 0 (decf (getf expectation :times)))
+                        (a:deletef (expectations) expectation :count 1))))
                (return (when (consp match)
                          (create-response request match)))
           finally (fail))))

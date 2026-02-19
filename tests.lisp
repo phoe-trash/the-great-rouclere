@@ -15,19 +15,37 @@
 
 (5am:in-suite the-great-rouclere)
 
+(defun arrange-basics (&optional (url "/ping"))
+  (r:expect (:get url)
+    (r:with :header "Magic-Dust" "Imagination")
+    (r:with :accept "application/magic-show")
+    (r:answer (h:+http-ok+)
+      (r:with :body "That's perfect!!!")
+      (r:with :content-type "text/magical")
+      (r:with :header "Magic-Dust" "Prestidigitation"))))
+
 (5am:test basics
   (r:with-magic (port)
     ;; Arrange
-    (r:expect (:get "/ping")
-      (r:with :header "Magic-Dust" "Imagination")
-      (r:with :accept "application/magic-show")
-      (r:answer (h:+http-ok+)
-        (r:with :body "That's perfect!!!")
-        (r:with :content-type "text/plain")
-        (r:with :header "Magic-Dust" "Prestidigitation")))
+    (arrange-basics)
+    ;; Act
+    (multiple-value-bind (body status-code headers)
+        (d:http-request (format nil "http://localhost:~D/ping" port)
+                        :accept "application/magic-show"
+                        :additional-headers '(("Magic-Dust" . "Imagination")))
+      ;; Assert
+      (5am:is (equal "That's perfect!!!" body))
+      (5am:is (=  200 status-code))
+      (5am:is (= 0 (search "text/magical" (a:assoc-value headers :content-type))))
+      (5am:is (equal "Prestidigitation" (a:assoc-value headers :magic-dust))))))
+
+(5am:test expectations-single
+  (r:with-magic (port)
+    ;; Arrange
+    (arrange-basics)
     ;; Assert
     (5am:is (= 1 (length (r:expectations))))
-    (let ((expectation (first (r:expectations))))
+    (let ((expectation (pop (r:expectations))))
       (5am:is (eq :get (getf expectation :method)))
       (5am:is (= 1 (getf expectation :times)))
       (5am:is (equal "/ping" (getf expectation :url)))
@@ -40,16 +58,45 @@
         (5am:is (= 200 (getf response :code)))
         (5am:is (equal "That's perfect!!!" (getf response :body)))
         (5am:is (a:set-equal '(("Magic-Dust" . "Prestidigitation")
-                               ("Content-Type" . "text/plain"))
+                               ("Content-Type" . "text/magical"))
                              (getf response :headers)
                              :test #'equal))))
-    ;; Act
-    (multiple-value-bind (body status-code headers)
-        (d:http-request (format nil "http://localhost:~D/ping" port)
-                        :accept "application/magic-show"
-                        :additional-headers '(("Magic-Dust" . "Imagination")))
-      ;; Assert
-      (5am:is (equal "That's perfect!!!" body))
-      (5am:is (=  200 status-code))
-      (5am:is (equal "text/plain" (a:assoc-value headers :content-type)))
-      (5am:is (equal "Prestidigitation" (a:assoc-value headers :magic-dust))))))
+    (5am:is (= 0 (length (r:expectations))))))
+
+(5am:test expectations-multiple
+  (r:with-magic (port)
+    ;; Arrange
+    (r:expect (:get "/ping"))
+    (r:expect (:get "/pong"))
+    (r:expect (:get "/pung"))
+    ;; Assert
+    (5am:is (= 3 (length (r:expectations))))
+    (let ((expectation (first (r:expectations))))
+      (5am:is (equal "/ping" (getf expectation :url))))
+    (let ((expectation (second (r:expectations))))
+      (5am:is (equal "/pong" (getf expectation :url))))
+    (let ((expectation (third (r:expectations))))
+      (5am:is (equal "/pung" (getf expectation :url))))
+    (flet ((test (path)
+             (let* ((url (format nil "http://localhost:~D~A" port path))
+                    (status-code (nth-value 1 (d:http-request url))))
+               (5am:is (= 200 status-code)))))
+      (mapc #'test '("/ping" "/pong" "/pung")))
+    (5am:is (= 0 (length (r:expectations))))))
+
+(5am:test unmet-expectation
+  (let ((flag nil))
+    (flet ((on-failure (expectations)
+             (setf flag t)
+             (5am:is (= 1 (length expectations)))
+             (let ((expectation (first expectations)))
+               (5am:is (eq :get (getf expectation :method)))
+               (5am:is (= 1 (getf expectation :times)))
+               (5am:is (equal "/nowhere" (getf expectation :url))))))
+      (let ((string (with-output-to-string (*debug-io*)
+                      (r:with-magic (port :on-failure #'on-failure)
+                        (r:expect (:get "/nowhere"))))))
+        (5am:is-true flag)
+        (5am:is (string= ";; The Great Rouclere still has has 1 unmet expectations!
+  1: (:METHOD :GET :URL \"/nowhere\" :TIMES 1)
+" string))))))
