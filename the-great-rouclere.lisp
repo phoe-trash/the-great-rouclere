@@ -76,15 +76,18 @@
 (defun delete-expectations ()
   (remhash (h:acceptor-port *magic*) *expectations*))
 
-(defun report-magic-failure (failures on-failure report-string)
+(defun report-magic-failure (failures on-failure report-string &optional (stream *debug-io*))
   (when failures
     (when on-failure (funcall on-failure failures))
-    (format *debug-io* "~&;; ")
-    (format *debug-io* report-string (length failures))
+    (when report-string
+      (format stream "~&;; ")
+      (format stream report-string (length failures)))
     (loop for list in failures
           for i from 1
-          do (format *debug-io* "~&~3D: ~S~%" i list))))
+          do (format stream "~&~3D: ~S~%" i list))))
 
+;; TODO ON-LETDOWN and ON-SURPRISE should be plurally named,
+;; they're called with whole lists of letdowns and surprises.
 (defun call-with-magic (thunk on-letdown on-surprise)
   (let ((*magic* (make-instance 'magic-acceptor :port 0)))
     (h:start *magic*)
@@ -265,13 +268,29 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Handling HTTP requests
 
+(defun unmake-request (request stream &optional data)
+  (format stream "~A ~A ~A~%"
+          (h:request-method request) (h:request-uri request) (h:server-protocol request))
+  (loop for (key . value) in (h:headers-in request) do
+    (format stream "~:(~A~): ~A~%" key value))
+  (terpri stream)
+  (when data (format stream "~A~%~%" data)))
+
+(defvar *request*)
+
 (defmethod h:acceptor-dispatch-request ((acceptor magic-acceptor) request)
+  (setf *request* request)
   (flet ((fail ()
-           (setf (h:return-code*) 555)
-           (setf (h:content-type*) "text/plain")
-           (let ((response "The Great Rouclere is surprised by this request!"))
-             (push (list request (copy-tree (expectations))) (surprises acceptor))
-             (h:abort-request-handler response))))
+           (push (list request (copy-tree (expectations))) (surprises acceptor))
+           (setf (h:return-code*) 555
+                 (h:content-type*) "text/plain")
+           (h:abort-request-handler
+            (with-output-to-string (stream)
+              (format stream ";; The Great Rouclere is surprised by this request!~%~%")
+              (unmake-request request stream (h:raw-post-data :external-format :utf-8))
+              (report-magic-failure (expectations) nil
+                                    "The Great Rouclere has had ~D expectations at the time."
+                                    stream)))))
     (bt:with-lock-held (*expectations-lock*)
       (loop with *magic* = acceptor
             for expectation in (expectations)
