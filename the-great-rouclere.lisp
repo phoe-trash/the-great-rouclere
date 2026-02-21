@@ -88,25 +88,26 @@
 
 ;; TODO ON-LETDOWN and ON-SURPRISE should be plurally named,
 ;; they're called with whole lists of letdowns and surprises.
-(defun call-with-magic (thunk on-letdown on-surprise)
+(defun call-with-magic (thunk on-letdowns on-surprises)
   (let ((*magic* (make-instance 'magic-acceptor :port 0)))
     (h:start *magic*)
     (unwind-protect
          (let ((port (h:acceptor-port *magic*)))
            (funcall thunk port)
-           (report-magic-failure (surprises *magic*) on-surprise
+           (report-magic-failure (surprises *magic*) on-surprises
                                  "The Great Rouclere has been surprised ~D times!")
-           (report-magic-failure (expectations) on-letdown
-                                 "The Great Rouclere still has has ~D unmet expectations!"))
+           (let ((expectations (remove t (expectations) :key (lambda (x) (getf x :times)))))
+             (report-magic-failure expectations on-letdowns
+                                   "The Great Rouclere still has has ~D unmet expectations!")))
       (delete-expectations)
       (h:stop *magic*))))
 
-(defmacro with-magic ((port-var &key on-letdown on-surprise) &body body)
+(defmacro with-magic ((port-var &key on-letdowns on-surprises) &body body)
   (a:with-gensyms (thunk)
     `(flet ((,thunk (,port-var)
               (declare (ignorable ,port-var))
               ,@body))
-       (call-with-magic #',thunk ,on-letdown ,on-surprise))))
+       (call-with-magic #',thunk ,on-letdowns ,on-surprises))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Expectation building
