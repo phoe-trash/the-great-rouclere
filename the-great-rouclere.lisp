@@ -3,8 +3,9 @@
   (:local-nicknames (#:a #:alexandria-2)
                     (#:h #:hunchentoot)
                     (#:s #:split-sequence))
-  (:export #:with-magic #:expect #:with #:answer
-           #:expectations #:+http-magic-is-gone+))
+  (:export  #:+http-magic-is-gone+
+            #:with-magic-show #:with-wand-pointed-at #:expect #:answer #:with
+            #:expectations))
 
 (in-package #:the-great-rouclere)
 
@@ -27,8 +28,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Acceptor
 
-(defclass magic-acceptor (h:acceptor)
-  ((surprises :accessor surprises :initform '())))
+(defclass magic-acceptor (h:acceptor) ())
 
 (defmethod h:acceptor-log-access ((acceptor magic-acceptor) &key &allow-other-keys))
 
@@ -62,20 +62,31 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Core
 
-(defvar *magic*)
+(defvar *port*)
 
 (defparameter *expectations* (make-hash-table))
 
-(defun expectations ()
-  (gethash (h:acceptor-port *magic*) *expectations*))
+(defun expectations (&optional (port *port*))
+  (gethash port *expectations*))
 
-(defun (setf expectations) (newval)
-  (setf (gethash (h:acceptor-port *magic*) *expectations*) newval))
+(defun (setf expectations) (newval &optional (port *port*))
+  (setf (gethash port *expectations*) newval))
 
-(defun delete-expectations ()
-  (remhash (h:acceptor-port *magic*) *expectations*))
+(defun delete-expectations (&optional (port *port*))
+  (remhash port *expectations*))
 
-(defun report-magic-failure (failures on-failure report-string &optional (stream *debug-io*))
+(defparameter *surprises* (make-hash-table))
+
+(defun surprises (&optional (port *port*))
+  (gethash port *surprises*))
+
+(defun (setf surprises) (newval &optional (port *port*))
+  (setf (gethash port *surprises*) newval))
+
+(defun delete-surprises (&optional (port *port*))
+  (remhash port *surprises*))
+
+(defun report-magic-failures (failures on-failure report-string &optional (stream *debug-io*))
   (when failures
     (when on-failure (funcall on-failure failures))
     (when report-string
@@ -85,37 +96,51 @@
           for i from 1
           do (format stream "~&~3D: ~S~%" i list))))
 
-;; TODO ON-LETDOWN and ON-SURPRISE should be plurally named,
-;; they're called with whole lists of letdowns and surprises.
-(defun call-with-magic (thunk on-letdowns on-surprises)
-  (let ((*magic* (make-instance 'magic-acceptor :port 0)))
-    (h:start *magic*)
-    (unwind-protect
-         (let ((port (h:acceptor-port *magic*)))
-           (funcall thunk port)
-           (report-magic-failure (surprises *magic*) on-surprises
-                                 "The Great Rouclere has been surprised ~D times!")
-           (let ((expectations (remove t (expectations) :key (lambda (x) (getf x :times)))))
-             (report-magic-failure expectations on-letdowns
-                                   "The Great Rouclere still has has ~D unmet expectations!")))
-      (delete-expectations)
-      (h:stop *magic*))))
+(defun collect-failures (acceptors)
+  (loop for acceptor in acceptors
+        for port = (h:acceptor-port acceptor)
+        nconc (loop for surprise in (surprises port)
+                    collect (list* port surprise))
+          into surprises
+        nconc (loop for letdown in (remove t (expectations port) :key (lambda (x) (getf x :times)))
+                    collect (list* :port port letdown))
+          into letdowns
+        finally (return (values surprises letdowns))))
 
-(defmacro with-magic ((port-var &key on-letdowns on-surprises) &body body)
-  (a:with-gensyms (thunk)
-    `(flet ((,thunk (,port-var)
-              (declare (ignorable ,port-var))
-              ,@body))
-       (call-with-magic #',thunk ,on-letdowns ,on-surprises))))
+(defun call-with-magic-show (thunk nports on-letdowns on-surprises)
+  (let ((acceptors (loop repeat nports collect (make-instance 'magic-acceptor :port 0)))
+        ports)
+    (unwind-protect
+         (progn
+           (mapc #'h:start acceptors)
+           (setf ports (mapcar #'h:acceptor-port acceptors))
+           (apply thunk ports)
+           (multiple-value-bind (surprises letdowns) (collect-failures acceptors)
+             (report-magic-failures surprises on-surprises
+                                    "The Great Rouclere has been surprised ~D times!")
+             (report-magic-failures letdowns on-letdowns
+                                    "The Great Rouclere still has ~D unmet expectations!"))))
+    (mapc #'delete-expectations ports)
+    (mapc #'delete-surprises ports)
+    (mapc #'h:stop acceptors)))
+
+(defmacro with-wand-pointed-at ((port-var) &body body)
+  `(let ((*port* ,port-var)) ,@body))
+
+(defmacro with-magic-show ((port-var-or-vars &key on-letdowns on-surprises) &body body)
+  (let ((port-vars (a:ensure-list port-var-or-vars)))
+    (a:with-gensyms (thunk)
+      `(flet ((,thunk (,@port-vars) (declare (ignorable ,@(rest port-vars)))
+                (with-wand-pointed-at (,(first port-vars)) ,@body)))
+         (call-with-magic-show #',thunk ,(length port-vars) ,on-letdowns ,on-surprises)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Expectation building
 
-;;; Held EITHER around the whole EXPECT block OR around a whole
+;;; Held EITHER around the whole EXPECT OR around a whole
 ;;; ACCEPTOR-DISPATCH-REQUEST. The two blocks must execute separately.
 (defvar *expectations-lock* (bt:make-lock "The Great Rouclere expectations lock"))
 
-;;; TODO we need to be able to handle multiple expectations for multiple magicks.
 (defvar *expectation*)
 
 (defmacro expect ((method url &key (times 1)) &body body)
@@ -125,7 +150,6 @@
        (let ((*expectation* (list :method ,method :url ,url :times ,times)))
          (bt:with-lock-held (*expectations-lock*)
            (multiple-value-prog1 ,@body
-             ;; TODO: use a proper queue instead of a O(n²) nconcf.
              (a:nconcf (expectations) (list *expectation*)))))))
 
 (defvar *answer*)
@@ -263,26 +287,26 @@
   (when data (format stream "~A~%~%" data)))
 
 (defmethod h:acceptor-dispatch-request ((acceptor magic-acceptor) request)
-  (flet ((fail ()
-           (push (list request (copy-tree (expectations))) (surprises acceptor))
-           (setf (h:return-code*) 555
-                 (h:content-type*) "text/plain")
-           (h:abort-request-handler
-            (with-output-to-string (stream)
-              (format stream ";; The Great Rouclere is surprised by this request!~%~%")
-              (unmake-request request stream (h:raw-post-data :external-format :utf-8))
-              (report-magic-failure (expectations) nil
-                                    "The Great Rouclere has had ~D expectations at the time."
-                                    stream)))))
-    (bt:with-lock-held (*expectations-lock*)
-      (loop with *magic* = acceptor
-            for expectation in (expectations)
-            for match = (match-expectation request expectation)
-            when match
-              do (cond ((eq t (getf expectation :times)))
-                       ((plusp (getf expectation :times))
-                        (when (= 0 (decf (getf expectation :times)))
-                          (a:deletef (expectations) expectation :count 1))))
-                 (return (when (consp match)
-                           (create-answer request match)))
-            finally (fail)))))
+  (let ((port (h:acceptor-port acceptor)))
+    (flet ((fail ()
+             (push (list request (copy-tree (expectations port))) (surprises port))
+             (setf (h:return-code*) 555
+                   (h:content-type*) "text/plain")
+             (h:abort-request-handler
+              (with-output-to-string (stream)
+                (format stream ";; The Great Rouclere is surprised by this request!~%~%")
+                (unmake-request request stream (h:raw-post-data :external-format :utf-8))
+                (report-magic-failures (expectations port) nil
+                                       "The Great Rouclere has had ~D expectations at the time."
+                                       stream)))))
+      (bt:with-lock-held (*expectations-lock*)
+        (loop for expectation in (expectations port)
+              for match = (match-expectation request expectation)
+              when match
+                do (cond ((eq t (getf expectation :times)))
+                         ((plusp (getf expectation :times))
+                          (when (= 0 (decf (getf expectation :times)))
+                            (a:deletef (expectations port) expectation :count 1))))
+                   (return (when (consp match)
+                             (create-answer request match)))
+              finally (fail))))))

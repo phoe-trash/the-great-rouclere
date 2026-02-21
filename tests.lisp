@@ -1,15 +1,19 @@
-(defpackage #:the-great-rouclere/tests
+(uiop:define-package #:the-great-rouclere/tests
   (:use #:cl)
   (:local-nicknames (#:a #:alexandria-2)
                     (#:d #:drakma)
                     (#:h #:hunchentoot)
                     (#:r #:the-great-rouclere))
-  (:export #:magic!))
+  (:export #:*debugp* #:magic!))
 
 (in-package #:the-great-rouclere/tests)
 
-(defun magic! ()
-  (5am:run! 'the-great-rouclere))
+(defvar *debugp* nil)
+
+(defun magic! (&optional (debugp *debugp*))
+  (let ((5am:*on-error* (if debugp :debug nil))
+        (5am:*on-failure* (if debugp :debug nil)))
+    (5am:run! 'the-great-rouclere)))
 
 (5am:def-suite the-great-rouclere)
 
@@ -25,7 +29,7 @@
       (r:with :header "Magic-Dust" "Prestidigitation"))))
 
 (5am:test basics
-  (r:with-magic (port)
+  (r:with-magic-show (port)
     ;; Arrange
     (arrange-basics)
     ;; Act
@@ -36,11 +40,11 @@
       ;; Assert
       (5am:is (equal "That's perfect!!!" body))
       (5am:is (= h:+http-ok+ status-code))
-      (5am:is (= 0 (search "text/magical" (a:assoc-value headers :content-type))))
+      (5am:is (eql 0 (search "text/magical" (a:assoc-value headers :content-type))))
       (5am:is (equal "Prestidigitation" (a:assoc-value headers :magic-dust))))))
 
 (5am:test expectations-single
-  (r:with-magic (port)
+  (r:with-magic-show (port)
     ;; Arrange
     (arrange-basics)
     ;; Assert
@@ -65,7 +69,7 @@
 
 (5am:test expectations-multiple
   (flet ((test (calls)
-           (r:with-magic (port)
+           (r:with-magic-show (port)
              ;; Arrange
              (r:expect (:get "/ping"))
              (r:expect (:get "/pong"))
@@ -98,38 +102,41 @@
                (5am:is (= 1 (getf expectation :times)))
                (5am:is (equal "/nowhere" (getf expectation :url))))))
       (let ((string (with-output-to-string (*debug-io*)
-                      (r:with-magic (port :on-letdowns #'on-letdowns)
+                      (r:with-magic-show (port :on-letdowns #'on-letdowns)
                         (r:expect (:get "/nowhere"))))))
         (5am:is-true flag)
-        (5am:is (= 0 (search ";; The Great Rouclere still has has 1 unmet expectations!" string)))))))
+        (5am:is (eql 0 (search ";; The Great Rouclere still has 1 unmet expectations!" string)))))))
 
 (5am:test surprise
-  (let ((flag nil))
+  (let ((flag nil)
+        expected-port)
     (flet ((on-surprises (surprises)
              (setf flag t)
              (5am:is (= 1 (length surprises)))
-             (destructuring-bind (request expectations) (first surprises)
+             (destructuring-bind (actual-port request expectations) (first surprises)
+               (5am:is (eql expected-port actual-port))
                (5am:is (eq :get (h:request-method request)))
                (5am:is (string= "/nowhere" (h:request-uri request)))
                (5am:is (null expectations)))))
       (let ((string (with-output-to-string (*debug-io*)
-                      (r:with-magic (port :on-surprises #'on-surprises)
+                      (r:with-magic-show (port :on-surprises #'on-surprises)
+                        (setf expected-port port)
                         (let* ((url (format nil "http://localhost:~D/nowhere" port)))
                           (multiple-value-bind (body status-code headers uri stream must-close reason)
                               (d:http-request url)
                             (declare (ignore headers uri stream must-close))
                             (5am:is (= r:+http-magic-is-gone+ status-code))
                             (5am:is (string= "Magic Is Gone" reason))
-                            (= 0 (search ";; The Great Rouclere is surprised by this request!" body))))))))
+                            (eql 0 (search ";; The Great Rouclere is surprised by this request!" body))))))))
         (5am:is-true flag)
-        (5am:is (= 0 (search ";; The Great Rouclere has been surprised 1 times!" string)))))))
+        (5am:is (eql 0 (search ";; The Great Rouclere has been surprised 1 times!" string)))))))
 
 (5am:test permanent-expectations
   (let ((flag nil))
     (flet ((on-letdowns (expectations)
              (declare (ignore expectations))
              (setf flag t)))
-      (r:with-magic (port :on-letdowns #'on-letdowns)
+      (r:with-magic-show (port :on-letdowns #'on-letdowns)
         (r:expect (:get "/always" :times t)
           (r:answer (h:+http-accepted+)))
         (5am:is (= 1 (length (r:expectations))))
@@ -139,3 +146,20 @@
                       always (= status-code h:+http-accepted+)))
         (5am:is (= 1 (length (r:expectations)))))
       (5am:is (null flag)))))
+
+(5am:test multimagic
+  (r:with-magic-show ((port1 port2 port3))
+    (flet ((spell (port url)
+             (r:with-wand-pointed-at (port)
+               (r:expect (:get url)
+                 (r:answer (h:+http-accepted+)))))
+           (test (port url)
+             (let* ((url (format nil "http://localhost:~D~A" port url))
+                    (status-code (nth-value 1 (d:http-request url))))
+               (5am:is (= h:+http-accepted+ status-code)))))
+      (spell port1 "/abra")
+      (spell port2 "/kadabra")
+      (spell port3 "/alakazam")
+      (test port2 "/kadabra")
+      (test port3 "/alakazam")
+      (test port1 "/abra"))))
