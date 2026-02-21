@@ -51,8 +51,8 @@
     ;; Arrange
     (arrange-basics)
     ;; Assert
-    (5am:is (= 1 (length (r:expectations))))
-    (let ((expectation (pop (r:expectations))))
+    (5am:is (= 1 (length (r:expectations port))))
+    (let ((expectation (pop (r:expectations port))))
       (5am:is (eq :get (getf expectation :method)))
       (5am:is (= 1 (getf expectation :times)))
       (5am:is (equal "/ping" (getf expectation :url)))
@@ -68,7 +68,7 @@
                                ("Content-Type" . "text/magical"))
                              (getf answer :headers)
                              :test #'equal))))
-    (5am:is (= 0 (length (r:expectations))))))
+    (5am:is (= 0 (length (r:expectations port))))))
 
 (5am:test expectations-multiple
   (flet ((test (calls)
@@ -78,19 +78,19 @@
              (r:expect (:get "/pong"))
              (r:expect (:get "/pung"))
              ;; Assert
-             (5am:is (= 3 (length (r:expectations))))
-             (let ((expectation (first (r:expectations))))
+             (5am:is (= 3 (length (r:expectations port))))
+             (let ((expectation (first (r:expectations port))))
                (5am:is (equal "/ping" (getf expectation :url))))
-             (let ((expectation (second (r:expectations))))
+             (let ((expectation (second (r:expectations port))))
                (5am:is (equal "/pong" (getf expectation :url))))
-             (let ((expectation (third (r:expectations))))
+             (let ((expectation (third (r:expectations port))))
                (5am:is (equal "/pung" (getf expectation :url))))
              (flet ((test (path)
                       (let* ((url (format nil "http://localhost:~D~A" port path))
                              (status-code (nth-value 1 (d:http-request url))))
                         (5am:is (= h:+http-ok+ status-code)))))
                (mapc #'test calls))
-             (5am:is (= 0 (length (r:expectations)))))))
+             (5am:is (= 0 (length (r:expectations port)))))))
     (let ((calls '("/ping" "/pong" "/pung")))
       (test calls)
       (test (reverse calls)))))
@@ -130,7 +130,13 @@
                             (declare (ignore headers uri stream must-close))
                             (5am:is (= r:+http-magic-is-gone+ status-code))
                             (5am:is (string= "Magic Is Gone" reason))
-                            (eql 0 (search ";; The Great Rouclere is surprised by this request!" body))))))))
+                            (eql 0 (search ";; The Great Rouclere is surprised by this request!" body))
+                            (5am:is (= 1 (length (r:surprises port))))
+                            (let ((surprise (first (r:surprises port))))
+                              (destructuring-bind (request expectations) surprise
+                                (5am:is (eq :get (h:request-method request)))
+                                (5am:is (string= "/nowhere" (h:request-uri request)))
+                                (5am:is (null expectations))))))))))
         (5am:is-true flag)
         (5am:is (eql 0 (search ";; The Great Rouclere has been surprised 1 times!" string)))))))
 
@@ -142,12 +148,12 @@
       (r:with-magic-show (port :on-letdowns #'on-letdowns :on-surprises #'fail)
         (r:expect (:get "/always" :times t)
           (r:answer (h:+http-accepted+)))
-        (5am:is (= 1 (length (r:expectations))))
+        (5am:is (= 1 (length (r:expectations port))))
         (5am:is (loop with url = (format nil "http://localhost:~D/always" port)
                       repeat 100
                       for status-code = (nth-value 1 (d:http-request url))
                       always (= status-code h:+http-accepted+)))
-        (5am:is (= 1 (length (r:expectations)))))
+        (5am:is (= 1 (length (r:expectations port)))))
       (5am:is (null flag)))))
 
 (5am:test multimagic

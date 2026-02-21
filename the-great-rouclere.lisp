@@ -5,7 +5,7 @@
                     (#:s #:split-sequence))
   (:export  #:+http-magic-is-gone+
             #:with-magic-show #:with-wand-pointed-at #:expect #:answer #:with
-            #:expectations))
+            #:expectations #:surprises))
 
 (in-package #:the-great-rouclere)
 
@@ -66,24 +66,24 @@
 
 (defparameter *expectations* (make-hash-table))
 
-(defun expectations (&optional (port *port*))
+(defun expectations (port)
   (gethash port *expectations*))
 
-(defun (setf expectations) (newval &optional (port *port*))
+(defun (setf expectations) (newval port)
   (setf (gethash port *expectations*) newval))
 
-(defun delete-expectations (&optional (port *port*))
+(defun delete-expectations (port)
   (remhash port *expectations*))
 
 (defparameter *surprises* (make-hash-table))
 
-(defun surprises (&optional (port *port*))
+(defun surprises (port)
   (gethash port *surprises*))
 
-(defun (setf surprises) (newval &optional (port *port*))
+(defun (setf surprises) (newval port)
   (setf (gethash port *surprises*) newval))
 
-(defun delete-surprises (&optional (port *port*))
+(defun delete-surprises (port)
   (remhash port *surprises*))
 
 (defun report-magic-failures (failures on-failure report-string &optional (stream *debug-io*))
@@ -150,7 +150,7 @@
        (let ((*expectation* (list :method ,method :url ,url :times ,times)))
          (bt:with-lock-held (*expectations-lock*)
            (multiple-value-prog1 ,@body
-             (a:nconcf (expectations) (list *expectation*)))))))
+             (a:nconcf (expectations *port*) (list *expectation*)))))))
 
 (defvar *answer*)
 
