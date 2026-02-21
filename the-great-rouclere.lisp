@@ -4,7 +4,7 @@
                     (#:h #:hunchentoot)
                     (#:s #:split-sequence))
   (:export #:with-magic #:expect #:with #:answer
-           #:expectations))
+           #:expectations #:+http-magic-is-gone+))
 
 (in-package #:the-great-rouclere)
 
@@ -22,8 +22,7 @@
    (babel:string-to-octets string :encoding (babel:make-external-format :utf-8))))
 
 ;;; We claim HTTP status code 555 to denote an expectation failure.
-(unless (nth-value 1 (gethash 555 h::*http-reason-phrase-map*))
-  (setf (gethash 555 h::*http-reason-phrase-map*) "Magic Is Gone"))
+(h::def-http-return-code +http-magic-is-gone+ 555 "Magic Is Gone")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Acceptor
