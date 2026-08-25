@@ -218,19 +218,26 @@
         (apply #'test set-3)
         (apply #'test set-1)))))
 
-
 (5am:test variables-predicates-side-effects
-  (let (result)
+  (let (result-1 result-2)
     (r:with-magic-show (port :on-letdowns #'fail :on-surprises #'fail)
       (r:expect (:get "/foo/:bar/baz/:quux/:frob")
         (r:with :predicate (lambda () (string= "123" (r:var "bar"))))
         (r:answer (h:+http-ok+)
           (r:with :side-effects
-                  (lambda () (setf result (list (r:var "quux") (r:var "frob")))))))
-      (let* ((url (make-url port "/foo/123/baz/456/789"))
-             (status (nth-value 1 (d:http-request url))))
-        (5am:is (= h:+http-ok+ status))
-        (5am:is (equal '("456" "789") result))))))
+                  (lambda () (setf result-1 (list (r:var "quux") (r:var "frob")))))
+          (r:with :body
+                  (lambda ()
+                    (setf result-2 (r:var "bar"))
+                    (format nil "~A~A~A"
+                            (r:var "bar") (r:var "quux") (r:var "frob"))))))
+      (let* ((url (make-url port "/foo/123/baz/456/789")))
+        (5am:is (null result-1))
+        (multiple-value-bind (body status) (d:http-request url)
+          (5am:is (string= "123456789" body))
+          (5am:is (= h:+http-ok+ status))
+          (5am:is (equal '("456" "789") result-1))
+          (5am:is (equal "123" result-2)))))))
 
 (5am:test variables-multiple-lengths
   (r:with-magic-show (port :on-letdowns #'fail :on-surprises #'fail)

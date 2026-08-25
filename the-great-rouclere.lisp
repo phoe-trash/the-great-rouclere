@@ -244,6 +244,8 @@
     (eq value (h:request-method*)))
   (:method ((key (eql :url)) value request)
     (url-match value (h:script-name*)))
+  (:method ((key (eql :body)) (value function) request)
+    (call-next-method key (funcall value) request))
   (:method ((key (eql :body)) value request)
     (string= value (h:raw-post-data :request request :external-format :utf-8)))
   (:method ((key (eql :headers)) value request)
@@ -285,7 +287,9 @@
   (loop with body = nil
         for (key value) on answer by #'cddr
         when (eq key :body)
-          do (setf body value)
+          do (setf body (if (functionp value)
+                            (funcall value)
+                            value))
         do (respond key value request)
         finally (return body)))
 
