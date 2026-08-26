@@ -85,10 +85,10 @@
              (report-magic-failures surprises on-surprises
                                     "The Great Rouclere has been surprised ~D times!")
              (report-magic-failures letdowns on-letdowns
-                                    "The Great Rouclere still has ~D unmet expectations!"))))
-    (mapc #'delete-expectations ports)
-    (mapc #'delete-surprises ports)
-    (mapc #'h:stop acceptors)))
+                                    "The Great Rouclere still has ~D unmet expectations!")))
+      (mapc #'delete-expectations ports)
+      (mapc #'delete-surprises ports)
+      (mapc #'h:stop acceptors))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Core
