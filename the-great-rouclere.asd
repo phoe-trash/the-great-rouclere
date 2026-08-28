@@ -7,7 +7,13 @@
                #:hunchentoot
                #:closer-mop)
   :serial t
-  :components ((:file "the-great-rouclere"))
+  :components ((:file "package")
+               (:file "core")
+               (:file "expectations")
+               (:file "answers")
+               (:file "with")
+               (:file "match-respond")
+               (:file "acceptor"))
   :in-order-to ((test-op (test-op #:the-great-rouclere/tests))))
 
 (asdf:defsystem #:the-great-rouclere/tests
